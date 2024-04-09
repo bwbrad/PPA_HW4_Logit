@@ -79,7 +79,9 @@ ga_recid <- read.csv("https://raw.githubusercontent.com/bwbrad/PPA_HW4_Logit/mai
 
 
 # Choosing Variables
+
 ### Education Level
+
 People who earned a HS diploma or less are much more represented in those which reoffended in under 3 years, suggesting level of education plays an important role in recidivism rates.
 
 ```{r TestIVs_Education}
@@ -93,7 +95,7 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "Set2") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -105,17 +107,14 @@ ggplot() +
         axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 ### Days Worked
-The median percent of days worked is much higher for those who did not reoffend, suggesting that stability of income and employment may be critical in keeping formerly convicted people out of the justice system.
 
-***This graph confuses me....not sure how to interpret it
+The median percent of days employed is much higher for those who did not reoffend. What jumps out particularly is the substantially greater number of reoffenses for people who were employed zero days. This suggests that stability of income and employment may be critical in keeping formerly convicted people out of the justice system.
 
 ```{r TestIVs_DaysWorked}
 ggplot() +
   geom_histogram(data = ga_recid,
                  aes(x = percent_days_employed, fill = recid_dv_char)) +
-  scale_fill_brewer(name = "Category",
-                    type = "qual",
-                    palette = "Set2",
+  scale_fill_manual(values = c("#1f78b4", "#ff7f00"),
                     guide = "none") +
   geom_vline(data = ga_recid %>%
                filter(recid_dv_char == "Reoffended in 3 years"),
@@ -132,9 +131,11 @@ ggplot() +
              lty = "dotdash",
              show.legend = TRUE) +
   scale_color_manual(name = "Median",
-                     values = c("Reoffended in 3 years" = "#f16913",
-                                "Did not reoffend in 3 years" = "#31a354")) +
+                     values = c("Reoffended in 3 years" = "#ff7f00",
+                                "Did not reoffend in 3 years" = "#1f78b4")) +
   scale_y_continuous(labels = scales::label_comma()) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  facet_wrap(~ recid_dv_char) +
   theme_minimal() +
   labs(title = "Recidivism by % days employed",
        x = "Share of days employed",
@@ -145,6 +146,7 @@ ggplot() +
 ```
 
 ### Prison Offense
+
 People who are charged with property offenses are more represented in those which reoffended in under 3 years, suggesting type of prison offense plays an important role in recidivism rates.
 
 ```{r TestIVs_PrisonOffense}
@@ -158,7 +160,7 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "PuBuGn") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -171,12 +173,23 @@ ggplot() +
 ```
 
 ### Prison Years
+
 People who are sentenced to fewer years in prison, specifically fewer than 2 years, are more likely to re-offend in 3 years than those who are given longer prison sentences. 
+
 This might be hard to push, but the high occurrence of people with repeated shorter sentences could suggest that those with lesser offences (assuming lesser offenses = shorter prison sentence) should not be sentenced at all. There could be an alternative intervention for these offenders to keep them out of the prison system for repeated short stints.
+
 ```{r TestIVs_PrisonYears}
 recid_by_PrisonYrs <- ga_recid %>% 
   group_by(prison_years, recid_dv_char) %>% 
   summarize(justice_inv_pop = n())
+
+recid_by_PrisonYrs$prison_years <- 
+  factor(recid_by_PrisonYrs$prison_years,
+         levels = c("Less than 1 year", "1-2 years",
+                    "Greater than 2 to 3 years", "More than 3 years"))
+
+x_labs_PrisonYrs <- c("Less than 1 year", "1-2 years",
+                      "2-3 years", "More than 3 years")
 
 ggplot() +
   geom_col(data = recid_by_PrisonYrs,
@@ -184,7 +197,8 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "PuBuGn") +
+                    palette = "Paired") +
+  scale_x_discrete(labels = x_labs_PrisonYrs) +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -197,7 +211,9 @@ ggplot() +
 ```
 
 ### Age at Release
+
 People who are younger at the time of their release are more likely to re-offend within three years. This suggests there needs to be more assistance to reintegrate younger people back into society after their prison release. Without proper social services and sustained behavioral intervention, younger people may be more inclined to fall back into previous behaviors.
+
 ```{r TestIVs_ReleaseAge}
 recid_by_Age <- ga_recid %>% 
   group_by(age_at_release, recid_dv_char) %>% 
@@ -209,7 +225,7 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "PuBuGn") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -222,6 +238,7 @@ ggplot() +
 ```
 
 ### Program Attendences
+
 Data suggest that people who do not attend any programs during their original sentence are more likely to re-offend in three years. This supports the efforts of prison programming to prevent future offenses. 
 
 Although.......Reoffenses in 3 years is technically higher in every single program attendence category, so I'm not sure how valid this assumption really is...
@@ -231,13 +248,18 @@ recid_by_Program <- ga_recid %>%
   group_by(program_attendances, recid_dv_char) %>% 
   summarize(justice_inv_pop = n())
 
+recid_by_Program$program_attendances <- 
+  factor(recid_by_Program$program_attendances,
+         levels = c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                    "10", "10 or more"))
+
 ggplot() +
   geom_col(data = recid_by_Program,
            aes(x = program_attendances, y = justice_inv_pop, fill = program_attendances),
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "GnBu") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -274,7 +296,7 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "PuBuGn") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
@@ -298,7 +320,7 @@ ggplot() +
            position = "dodge",
            show.legend = FALSE) +
   scale_fill_brewer(type = "qual",
-                    palette = "PuBuGn") +
+                    palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
   facet_wrap(~ recid_dv_char) +
   theme_minimal() +
