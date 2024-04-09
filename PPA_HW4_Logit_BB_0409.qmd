@@ -20,6 +20,94 @@ reference-location: document
 ## Exploring modeling variables
 
 ```{r}
+library(dplyr)
+library(tidyr)
+library(tidycensus)
+library(knitr)
+library(gt)
+library(sf)
+library(ggplot2)
+library(janitor)
+library(tigris)
 
+ga_recid <- read.csv("Data/NIJ_s_Recidivism_Challenge_Full_Dataset_20240409.csv",
+                     na.strings = c(""," ","NA")) %>% 
+  clean_names("snake") %>% 
+  mutate(recidivism_within_3years = case_when(recidivism_within_3years == "true" ~ 1,
+                                              recidivism_within_3years == "false" ~ 0),
+         recid_dv_char = case_when(recidivism_within_3years == 1 ~
+                                     "Reoffended in 3 years",
+                                              recidivism_within_3years == 0 ~
+                                     "Did not reoffend in 3 years"))
 ```
 
+People who earned a HS diploma or less are much more represented in those which reoffended in under 3 years, suggesting level of education plays an important role in recidivism rates.
+
+```{r}
+recid_by_education <- ga_recid %>% 
+  group_by(education_level, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+ggplot() +
+  geom_col(data = recid_by_education,
+           aes(x = education_level, y = justice_inv_pop, fill = education_level),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Set2") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char) +
+  theme_minimal() +
+  labs(title = "Recidivism by eductional attainment",
+       x = "Level of educational attainment",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The median percent of days worked is much higher for those who did not reoffend, suggesting that stability of income and employment may be critical in keeping formerly convicted people out of the justice system.
+
+```{r}
+ggplot() +
+  geom_histogram(data = ga_recid,
+                 aes(x = percent_days_employed, fill = recid_dv_char)) +
+  scale_fill_brewer(name = "Category",
+                    type = "qual",
+                    palette = "Set2",
+                    guide = "none") +
+  geom_vline(data = ga_recid %>%
+               filter(recid_dv_char == "Reoffended in 3 years"),
+             aes(xintercept = median(percent_days_employed, na.rm = T),
+                 colour = "Reoffended in 3 years"),
+             lwd = 0.8,
+             lty = "longdash",
+             show.legend = TRUE) +
+  geom_vline(data = ga_recid %>%
+               filter(recid_dv_char == "Did not reoffend in 3 years"),
+             aes(xintercept = median(percent_days_employed, na.rm = T),
+                 colour = "Did not reoffend in 3 years"),
+             lwd = 0.8,
+             lty = "dotdash",
+             show.legend = TRUE) +
+  scale_color_manual(name = "Median",
+                     values = c("Reoffended in 3 years" = "#f16913",
+                                "Did not reoffend in 3 years" = "#31a354")) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  theme_minimal() +
+  labs(title = "Recidivism by % days employed",
+       x = "Share of days employed",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+## Best-performing model
+
+## Prediction error and disparities by race & gender
+
+## Estimating a "cost" of recidivism
+
+## Estimating a "cost" of recidivism
