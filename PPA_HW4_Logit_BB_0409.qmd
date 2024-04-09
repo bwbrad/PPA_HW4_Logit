@@ -1,0 +1,25 @@
+---
+title: "Challenges of predicting recidivism rates"
+subtite: "Logistic regression using Georgia OJP data"
+author: "Bailey Bradford, Frances Murray, and Jonathan Zisk"
+date: 2024-03-28
+toc: true
+format:
+  html:
+    self-contained: true
+    code-fold: true
+editor: visual
+execute:
+   message: false
+   warning: false
+reference-location: document
+---
+
+## Weighing tradeoffs between sensitivity and specificity
+
+## Exploring modeling variables
+
+```{r}
+
+```
+
