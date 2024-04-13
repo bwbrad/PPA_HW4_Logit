@@ -43,9 +43,13 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache = TRUE, warning = FALS
 
 ### Discussion of Trade-offs between sensitivity and specificity
 
+- Sensitivity would indicate that the model has a low rate of false negatives (a person is predicted to not reoffend, bud did reoffend). It might be important to keep false negatives low if you have a limited budget or amount of time and want to target resources most heavily towards those who are likely to reoffend. 
+- Specificity would indicate that the model low rate of false positives (a person is predicted to reoffend, but did not reoffend). A false positive is dangerous if someone is labeled as a "likely reoffender" and they have greater burdens put on them in a system of parole and probation that is already deeply burdensome and dehumanizing.
+
 
 ```{r load_packages, warning = FALSE}
 options(scipen=10000000)
+install.packages("plotROC")
 
 ####### CHECK if we need all of the below
 
@@ -57,8 +61,6 @@ library(pscl)
 library(plotROC)
 library(pROC)
 library(lubridate)
-library(dplyr)
-library(tidyr)
 library(tidycensus)
 library(gt)
 library(sf)
@@ -69,16 +71,24 @@ library(tigris)
 ga_recid <- read.csv("https://raw.githubusercontent.com/bwbrad/PPA_HW4_Logit/main/Data/NIJ_s_Recidivism_Challenge_Full_Dataset_20240409.csv",
                      na.strings = c(""," ","NA")) %>% 
   clean_names("snake") %>% 
-  mutate(recidivism_within_3years = case_when(recidivism_within_3years == "true" ~ 1,
-                                              recidivism_within_3years == "false" ~ 0),
-         recid_dv_char = case_when(recidivism_within_3years == 1 ~
-                                     "Reoffended in 3 years",
-                                              recidivism_within_3years == 0 ~
-                                     "Did not reoffend in 3 years"))
+  mutate(recidivism_within_3years = 
+           case_when(recidivism_within_3years == "true" ~ 1,
+                     recidivism_within_3years == "false" ~ 0),
+         recid_dv_char = 
+           case_when(recidivism_within_3years == 1 ~ "Reoffended in 3 years",
+                     recidivism_within_3years == 0 ~ "Did not reoffend in 3 years"))
 ```
 
 
 # Choosing Variables
+
+```{r}
+recid_sum <- ga_recid %>% 
+  group_by(recid_dv_char) %>% 
+  summarize(people = n()) %>% 
+  mutate(pct_people = people / sum(people))
+```
+
 
 ### Education Level
 
@@ -239,7 +249,7 @@ ggplot() +
 
 ### Program Attendences
 
-Data suggest that people who do not attend any programs during their original sentence are more likely to re-offend in three years. This supports the efforts of prison programming to prevent future offenses. 
+The outlier is that many more people who do not attend any programs during their original sentence are more likely to re-offend in three years. This supports the efforts of prison programming to prevent future offenses. 
 
 Although.......Reoffenses in 3 years is technically higher in every single program attendence category, so I'm not sure how valid this assumption really is...
 
@@ -271,7 +281,97 @@ ggplot() +
         axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+## Best-performing model
 
+- Creating dummy variables for categorical seem to help
+- Jobs per year, average days per drug test, violations fail to report, violations move without permission, made model worse
+- A no program attendance variable was not helpful
+
+```{r create_partition}
+ga_recid <- ga_recid %>% 
+  mutate(prison_years_over3 = case_when(prison_years == "More than 3 years" ~ 1,
+                                        prison_years %in% c("Less than 1 year", "Greater than 2 to 3 years") ~ 0),
+         programs_over10 = case_when(program_attendances == "10 or more" ~ 1,
+                                     TRUE ~ 0),
+         programs_none = case_when(program_attendances == "0" ~ 1,
+                                   TRUE ~ 0),
+         older_than37 = case_when(age_at_release %in% c("38-42", "43-47", "48 or older") ~ 1,
+                                  age_at_release %in% c("18-22", "23-27", "23-27", "28-32", "33-37") ~ 0),
+         some_college = case_when(education_level == "At least some college" ~ 1,
+                                  education_level %in% c("High School Diploma", "Less than HS diploma") ~ 0),
+         high_supervision = case_when(supervision_level_first == "High" ~ 1,
+                                      TRUE ~ 0),
+         offense_property = case_when(prison_offense == "Property" ~ 1,
+                                      TRUE ~ 0),
+         offense_violent_sex = case_when(prison_offense == "Violent/Sex" ~ 1,
+                                         TRUE ~ 0),
+         one_dependent = case_when(dependents == "1" ~ 1,
+                                   TRUE ~ 0),
+      
+    )
+
+set.seed(3456)
+
+train_index <- createDataPartition(ga_recid$recidivism_within_3years, p = .50,
+                                  list = FALSE,
+                                  times = 1)
+
+recid_train <- ga_recid[ train_index,]
+recid_test  <- ga_recid[-train_index,]
+
+unique(ga_recid$supervision_level_first)
+```
+
+```{r}
+recid_model_1 <- glm(recidivism_within_3years ~ .,
+                     data = ga_recid,
+                     family="binomial" (link="logit"))
+
+summary(recid_model_1)
+
+pR2(recid_model_1)
+
+recid_model_2 <- glm(recidivism_within_3years ~ some_college + offense_property +
+                       offense_violent_sex + percent_days_employed + jobs_per_year +
+                       prison_years_over3 + older_than37 + programs_over10 + 
+                       high_supervision,
+                     data = ga_recid,
+                     family="binomial" (link="logit"))
+
+summary(recid_model_2)
+
+pR2(recid_model_2)
+
+recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property +
+                       offense_violent_sex + percent_days_employed +
+                       prison_years_over3 + older_than37 + programs_over10 +
+                       high_supervision + supervision_risk_score_first + one_dependent +
+                       prior_arrest_episodes_dv_charges + prior_revocations_parole +
+                       prior_revocations_probation,
+                     data = ga_recid,
+                     family="binomial" (link="logit")) 
+
+summary(recid_model_3)
+
+pR2(recid_model_3)
+```
+
+- recid_model_2: 65% accuracy, more false positives than false negatives
+- recid_model_3: 69% accuracy, still more false positives
+
+```{r}
+test_probs <- data.frame(outcome = as.factor(recid_test$recidivism_within_3years),
+                         probs = predict(recid_model_3, recid_test, type= "response")) %>%
+  mutate(pred_outcome = as.factor(ifelse(probs > 0.5 , 1, 0)))
+
+caret::confusionMatrix(test_probs$pred_outcome, test_probs$outcome, 
+                       positive = "1")
+```
+
+
+## Prediction error and disparities by race & gender
+
+## Estimating a "cost" of recidivism
 
 
 
