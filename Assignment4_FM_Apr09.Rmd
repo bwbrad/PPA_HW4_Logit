@@ -63,10 +63,11 @@ library(pROC)
 library(lubridate)
 library(tidycensus)
 library(gt)
+library(gtExtras)
 library(sf)
-library(ggplot2)
 library(janitor)
 library(tigris)
+library(RColorBrewer)
 
 ga_recid <- read.csv("https://raw.githubusercontent.com/bwbrad/PPA_HW4_Logit/main/Data/NIJ_s_Recidivism_Challenge_Full_Dataset_20240409.csv",
                      na.strings = c(""," ","NA")) %>% 
@@ -145,7 +146,7 @@ ggplot() +
                                 "Did not reoffend in 3 years" = "#1f78b4")) +
   scale_y_continuous(labels = scales::label_comma()) +
   scale_x_continuous(labels = scales::label_percent()) +
-  facet_wrap(~ recid_dv_char) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
   theme_minimal() +
   labs(title = "Recidivism by % days employed",
        x = "Share of days employed",
@@ -162,7 +163,8 @@ People who are charged with property offenses are more represented in those whic
 ```{r TestIVs_PrisonOffense}
 recid_by_prisonoffense <- ga_recid %>% 
   group_by(prison_offense, recid_dv_char) %>% 
-  summarize(justice_inv_pop = n())
+  summarize(justice_inv_pop = n()) %>% 
+  filter(prison_offense != "NA")
 
 ggplot() +
   geom_col(data = recid_by_prisonoffense,
@@ -172,7 +174,7 @@ ggplot() +
   scale_fill_brewer(type = "qual",
                     palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
-  facet_wrap(~ recid_dv_char) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
   theme_minimal() +
   labs(title = "Recidivism by prison offense",
        x = "Prison Offense",
@@ -210,7 +212,7 @@ ggplot() +
                     palette = "Paired") +
   scale_x_discrete(labels = x_labs_PrisonYrs) +
   scale_y_continuous(labels = scales::label_comma()) +
-  facet_wrap(~ recid_dv_char) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
   theme_minimal() +
   labs(title = "Recidivism by prison years",
        x = "Prison years",
@@ -237,7 +239,7 @@ ggplot() +
   scale_fill_brewer(type = "qual",
                     palette = "Paired") +
   scale_y_continuous(labels = scales::label_comma()) +
-  facet_wrap(~ recid_dv_char) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
   theme_minimal() +
   labs(title = "Recidivism by age at release",
        x = "Age at Release",
@@ -323,6 +325,7 @@ unique(ga_recid$supervision_level_first)
 ```
 
 ```{r}
+
 recid_model_1 <- glm(recidivism_within_3years ~ .,
                      data = ga_recid,
                      family="binomial" (link="logit"))
@@ -354,6 +357,7 @@ recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property 
 summary(recid_model_3)
 
 pR2(recid_model_3)
+
 ```
 
 - recid_model_2: 65% accuracy, more false positives than false negatives
@@ -366,6 +370,47 @@ test_probs <- data.frame(outcome = as.factor(recid_test$recidivism_within_3years
 
 caret::confusionMatrix(test_probs$pred_outcome, test_probs$outcome, 
                        positive = "1")
+```
+
+```{r}
+
+auc(test_probs$outcome, test_probs$probs)
+
+
+ggplot(test_probs, aes(d = as.numeric(outcome), m = probs)) +
+  geom_roc(n.cuts = 50, labels = FALSE, colour = "#1f78b4") +
+  style_roc(theme = theme_grey) +
+  geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
+  labs(title = "ROC Curve - Recidivism Model")
+```
+
+### Confusion Matrix
+
+```{r thresholds}
+test_probs <- 
+  test_probs %>%
+  mutate(pred_outcome  = as.factor(ifelse(test_probs$probs > 0.5 , 1, 0)))
+```
+
+```{r confusion_matrix}
+caret::confusionMatrix(test_probs$pred_outcome, test_probs$outcome, 
+                       positive = "1")
+
+```
+
+
+```{r}
+
+palette2 <- c("#ff7f00","#1f78b4")
+
+ggplot(subset(test_probs, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
+  geom_density(alpha = .75) +
+  scale_fill_manual(values = palette2) +
+  labs(x = "Recidivism", y = "Density of probabilities",
+       title = "Distribution of predicted probabilities by observed outcome") +
+  theme(strip.text.x = element_text(size = 18))
+  
+  
 ```
 
 
