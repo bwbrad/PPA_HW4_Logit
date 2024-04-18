@@ -49,7 +49,6 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache = TRUE, warning = FALS
 
 ```{r load_packages, warning = FALSE}
 options(scipen=10000000)
-install.packages("plotROC")
 
 ####### CHECK if we need all of the below
 
@@ -72,12 +71,13 @@ library(RColorBrewer)
 ga_recid <- read.csv("https://raw.githubusercontent.com/bwbrad/PPA_HW4_Logit/main/Data/NIJ_s_Recidivism_Challenge_Full_Dataset_20240409.csv",
                      na.strings = c(""," ","NA")) %>% 
   clean_names("snake") %>% 
-  mutate(recidivism_within_3years = 
-           case_when(recidivism_within_3years == "true" ~ 1,
-                     recidivism_within_3years == "false" ~ 0),
-         recid_dv_char = 
-           case_when(recidivism_within_3years == 1 ~ "Reoffended in 3 years",
-                     recidivism_within_3years == 0 ~ "Did not reoffend in 3 years"))
+  mutate(recidivism_within_3years = case_when(
+           recidivism_within_3years == "true" ~ 1,
+           recidivism_within_3years == "false" ~ 0),
+         recid_dv_char = case_when(
+           recidivism_within_3years == 1 ~ "Reoffended in 3 years",
+           recidivism_within_3years == 0 ~ "Did not reoffend in 3 years")) %>% 
+  filter(!is.na(percent_days_employed))
 ```
 
 
@@ -291,25 +291,35 @@ ggplot() +
 
 ```{r create_partition}
 ga_recid <- ga_recid %>% 
-  mutate(prison_years_over3 = case_when(prison_years == "More than 3 years" ~ 1,
-                                        prison_years %in% c("Less than 1 year", "Greater than 2 to 3 years") ~ 0),
-         programs_over10 = case_when(program_attendances == "10 or more" ~ 1,
-                                     TRUE ~ 0),
-         programs_none = case_when(program_attendances == "0" ~ 1,
-                                   TRUE ~ 0),
-         older_than37 = case_when(age_at_release %in% c("38-42", "43-47", "48 or older") ~ 1,
-                                  age_at_release %in% c("18-22", "23-27", "23-27", "28-32", "33-37") ~ 0),
-         some_college = case_when(education_level == "At least some college" ~ 1,
-                                  education_level %in% c("High School Diploma", "Less than HS diploma") ~ 0),
-         high_supervision = case_when(supervision_level_first == "High" ~ 1,
-                                      TRUE ~ 0),
-         offense_property = case_when(prison_offense == "Property" ~ 1,
-                                      TRUE ~ 0),
-         offense_violent_sex = case_when(prison_offense == "Violent/Sex" ~ 1,
-                                         TRUE ~ 0),
-         one_dependent = case_when(dependents == "1" ~ 1,
-                                   TRUE ~ 0),
-      
+  mutate(prison_years_over3 = case_when(
+           prison_years == "More than 3 years" ~ 1,
+           TRUE ~ 0),
+         programs_over10 = case_when(
+           program_attendances == "10 or more" ~ 1,
+           TRUE ~ 0),
+         programs_none = case_when(
+           program_attendances == "0" ~ 1,
+           TRUE ~ 0),
+         older_than37 = case_when(
+           age_at_release %in% c("38-42", "43-47", "48 or older") ~ 1,
+           age_at_release %in% c("18-22", "23-27", "23-27", 
+                                 "28-32", "33-37") ~ 0),
+         some_college = case_when(
+           education_level == "At least some college" ~ 1,
+           education_level %in% c("High School Diploma",
+                                  "Less than HS diploma") ~ 0),
+         high_supervision = case_when(
+           supervision_level_first == "High" ~ 1,
+           TRUE ~ 0),
+         offense_property = case_when(
+           prison_offense == "Property" ~ 1,
+           TRUE ~ 0),
+         offense_violent_sex = case_when(
+           prison_offense == "Violent/Sex" ~ 1,
+           TRUE ~ 0),
+         one_dependent = case_when(
+           dependents == "1" ~ 1,
+           TRUE ~ 0),
     )
 
 set.seed(3456)
@@ -324,8 +334,7 @@ recid_test  <- ga_recid[-train_index,]
 unique(ga_recid$supervision_level_first)
 ```
 
-```{r}
-
+```{r models}
 recid_model_1 <- glm(recidivism_within_3years ~ .,
                      data = ga_recid,
                      family="binomial" (link="logit"))
@@ -348,7 +357,7 @@ pR2(recid_model_2)
 recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property +
                        offense_violent_sex + percent_days_employed +
                        prison_years_over3 + older_than37 + programs_over10 +
-                       high_supervision + supervision_risk_score_first + one_dependent +
+                       high_supervision + one_dependent +
                        prior_arrest_episodes_dv_charges + prior_revocations_parole +
                        prior_revocations_probation,
                      data = ga_recid,
@@ -358,63 +367,93 @@ summary(recid_model_3)
 
 pR2(recid_model_3)
 
+sum(is.na(ga_recid$percent_days_employed))
 ```
 
 - recid_model_2: 65% accuracy, more false positives than false negatives
 - recid_model_3: 69% accuracy, still more false positives
 
-```{r}
-test_probs <- data.frame(outcome = as.factor(recid_test$recidivism_within_3years),
-                         probs = predict(recid_model_3, recid_test, type= "response")) %>%
-  mutate(pred_outcome = as.factor(ifelse(probs > 0.5 , 1, 0)))
+```{r conf_matrix}
+recid_test <- recid_test %>% 
+  mutate(outcome = as.factor(recidivism_within_3years),
+         probs = predict(recid_model_3, recid_test, type= "response"),
+         pred_outcome = as.factor(case_when(probs >= 0.5 ~ 1,
+                                            probs < 0.5 ~ 0)))
 
-caret::confusionMatrix(test_probs$pred_outcome, test_probs$outcome, 
-                       positive = "1")
+cm <- confusionMatrix(recid_test$pred_outcome, recid_test$outcome,
+                      positive = "1")
+
+cm_table <- cm$table
+cm_df <- as.data.frame(cm_table)
+
+rownames(cm_df) <- c("True Negative", "False Positive", 
+                     "False Negative", "True Positive")
 ```
 
-```{r}
-
-auc(test_probs$outcome, test_probs$probs)
-
+```{r roc_curve}
+auc(recid_test$outcome, recid_test$probs)
 
 ggplot(test_probs, aes(d = as.numeric(outcome), m = probs)) +
   geom_roc(n.cuts = 50, labels = FALSE, colour = "#1f78b4") +
   style_roc(theme = theme_grey) +
   geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
-  labs(title = "ROC Curve - Recidivism Model")
+  labs(title = "ROC Curve: Recidivism Model") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)))
 ```
 
 ### Confusion Matrix
 
-```{r thresholds}
-test_probs <- 
-  test_probs %>%
-  mutate(pred_outcome  = as.factor(ifelse(test_probs$probs > 0.5 , 1, 0)))
+```{r cm_as_tbl}
+gt(cm_df %>% 
+     rownames_to_column()) %>% 
+  fmt_number(columns = Freq, decimals = 0) %>% 
+  tab_header(title = md("**Confusion Matrix**")) %>%
+  opt_align_table_header(align = "left") %>%
+  cols_label(Freq = "Frequency")
 ```
-
-```{r confusion_matrix}
-caret::confusionMatrix(test_probs$pred_outcome, test_probs$outcome, 
-                       positive = "1")
-
-```
-
 
 ```{r}
-
 palette2 <- c("#ff7f00","#1f78b4")
 
-ggplot(subset(test_probs, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
-  geom_density(alpha = .75) +
-  scale_fill_manual(values = palette2) +
+ggplot(subset(recid_test, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
+  geom_density(alpha = .75,
+               color = NA) +
+  scale_fill_manual(name = "Outcome",
+                    values = palette2) +
   labs(x = "Recidivism", y = "Density of probabilities",
        title = "Distribution of predicted probabilities by observed outcome") +
-  theme(strip.text.x = element_text(size = 18))
-  
-  
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        strip.text.x = element_text(size = 18))
 ```
 
-
 ## Prediction error and disparities by race & gender
+
+```{r}
+recid_test <- recid_test %>% 
+  mutate(cm = case_when((outcome == 1) & (pred_outcome == 1) ~ "True Positive",
+                        (outcome == 0) & (pred_outcome == 1) ~ "False Positive",
+                        (outcome == 0) & (pred_outcome == 0) ~ "True Negative",
+                        (outcome == 1) & (pred_outcome == 0) ~ "False Negative"),
+         gender = case_when(gender == "F" ~ "Women",
+                            gender == "M" ~ "Men"),
+         race = case_when(race == "BLACK" ~ "Black",
+                          race == "WHITE" ~ "White"))
+
+error_by_demographics <- recid_test %>% 
+  group_by(gender, race, cm) %>% 
+  tally() %>% 
+  mutate(pct_outcome = n / sum(n))
+
+gt(error_by_demographics) %>% 
+  fmt_number(columns = n, decimals = 0) %>% 
+  fmt_percent(columns = pct_outcome, decimals = 1) %>% 
+  cols_label(cm = "Prediction Category",
+             n = "Count",
+             pct_outcome = "% Subgroup")
+```
+
 
 ## Estimating a "cost" of recidivism
 
