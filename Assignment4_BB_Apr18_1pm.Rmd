@@ -1,0 +1,530 @@
+---
+title: "Assignment 4: Modeling Recidivism"
+author: "Bailey Bradford, Frances Murray, Jonathan Zisk"
+date: "2024-04-09"
+output:
+  html_document:
+    theme: cosmo 
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    code_folding: hide
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache = TRUE, warning = FALSE, results = "hide")
+```
+
+# Trade-offs between sensitivity and specificity
+
+Recidivism, or the tendency of a person previously convicted of a crime to reoffend, can be critical to understand in order to effectively target limited time and resources. Using a model to predict recidivism might help more fairly distribute resources to prevent justice-involved people from falling back into prison. Said model might just as easily be manipulated to tighten the disproportionate hold the parole and probation system has on certian communities.
+
+This duality is highlighted by the decisions that go into a logistic regression, or logit, model which uses potential predictors to come up with a binary (yes/no) outcome. One of the most important considerations in building a logit model are the the tradeoffs between sensitivity and specificity:
+
+- **High sensitivity** would indicate that the model has a low rate of false negatives (a person is predicted to not reoffend, bud did reoffend). It might be important to keep false negatives low if you have a limited budget or amount of time and want to target resources most heavily towards those who are likely to reoffend. 
+- **High specificity** would indicate that the model low rate of false positives (a person is predicted to reoffend, but did not reoffend). A false positive is dangerous if someone is labeled as a "likely reoffender" and they have greater burdens put on them in a system of parole and probation that is already deeply burdensome and dehumanizing.
+
+```{r load_packages, warning = FALSE}
+options(scipen=10000000)
+
+####### CHECK if we need all of the below
+
+library(tidyverse)
+library(kableExtra)
+library(caret)
+library(knitr) 
+library(pscl)
+library(plotROC)
+library(pROC)
+library(lubridate)
+library(tidycensus)
+library(gt)
+library(gtExtras)
+library(sf)
+library(janitor)
+library(tigris)
+library(RColorBrewer)
+library(stargazer)
+
+ga_recid <- read.csv("https://raw.githubusercontent.com/bwbrad/PPA_HW4_Logit/main/Data/NIJ_s_Recidivism_Challenge_Full_Dataset_20240409.csv",
+                     na.strings = c(""," ","NA")) %>% 
+  clean_names("snake") %>% 
+  mutate(recidivism_within_3years = case_when(
+           recidivism_within_3years == "true" ~ 1,
+           recidivism_within_3years == "false" ~ 0),
+         recid_dv_char = case_when(
+           recidivism_within_3years == 1 ~ "Reoffended in 3 years",
+           recidivism_within_3years == 0 ~ "Did not reoffend in 3 years")) %>% 
+  filter(!is.na(percent_days_employed))
+
+recid_sum <- ga_recid %>% 
+  group_by(recid_dv_char) %>% 
+  summarize(people = n()) %>% 
+  mutate(pct_people = people / sum(people))
+```
+
+# Choosing Variables
+
+This model is built using data from Georgia's Office of Justice Programs on a subset of the state's justice-involved population up through 2021. From a high level, 17% more people reoffend within 3 years. A greater share of reoffenses from the start means that whatever model we build will do a better job predicting those who do reoffend opposed to those who do not.
+
+```{r, results = "show"}
+gt(recid_sum) %>% 
+  fmt_number(columns = people, decimals = 0) %>% 
+  fmt_percent(columns = pct_people, decimals = 1) %>% 
+  cols_label(recid_dv_char = "Outcome",
+             people = "Number",
+             pct_people = "Percent") %>% 
+  tab_header(title = md("**Overview of justice-involved population**"))
+```
+
+Below is a discussion on a variety of variables included in the Georgia dataset and their relationship to recidisim:
+
+### Education Level
+
+People who earned a HS diploma or less are much more represented in those which reoffended in under 3 years, suggesting level of education plays an important role in recidivism rates.
+
+```{r TestIVs_Education, fig.width=5, fig.height=4}
+recid_by_education <- ga_recid %>% 
+  group_by(education_level, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+ggplot() +
+  geom_col(data = recid_by_education,
+           aes(x = education_level, y = justice_inv_pop, fill = education_level),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char) +
+  theme_minimal() +
+  labs(title = "Recidivism by eductional attainment",
+       x = "Level of educational attainment",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+### Days Worked
+
+The median percent of days employed is much higher for those who did not reoffend. What jumps out particularly is the substantially greater number of reoffenses for people who were employed zero days. This suggests that stability of income and employment may be critical in keeping formerly convicted people out of the justice system.
+
+```{r TestIVs_DaysWorked, fig.width=8, fig.height=4}
+ggplot() +
+  geom_histogram(data = ga_recid,
+                 aes(x = percent_days_employed, fill = recid_dv_char)) +
+  scale_fill_manual(values = c("#1f78b4", "#ff7f00"),
+                    guide = "none") +
+  geom_vline(data = ga_recid %>%
+               filter(recid_dv_char == "Reoffended in 3 years"),
+             aes(xintercept = median(percent_days_employed, na.rm = T),
+                 colour = "Reoffended in 3 years"),
+             lwd = 0.8,
+             lty = "longdash",
+             show.legend = TRUE) +
+  geom_vline(data = ga_recid %>%
+               filter(recid_dv_char == "Did not reoffend in 3 years"),
+             aes(xintercept = median(percent_days_employed, na.rm = T),
+                 colour = "Did not reoffend in 3 years"),
+             lwd = 0.8,
+             lty = "dotdash",
+             show.legend = TRUE) +
+  scale_color_manual(name = "Median",
+                     values = c("Reoffended in 3 years" = "#ff7f00",
+                                "Did not reoffend in 3 years" = "#1f78b4")) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
+  theme_minimal() +
+  labs(title = "Recidivism by % days employed",
+       x = "Share of days employed",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Prison Offense
+
+People who are charged with property offenses are more represented in those which reoffended in under 3 years, suggesting type of prison offense plays an important role in recidivism rates.
+
+```{r TestIVs_PrisonOffense, fig.width=7, fig.height=4}
+recid_by_prisonoffense <- ga_recid %>% 
+  group_by(prison_offense, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n()) %>% 
+  filter(prison_offense != "NA")
+
+ggplot() +
+  geom_col(data = recid_by_prisonoffense,
+           aes(x = prison_offense, y = justice_inv_pop, fill = prison_offense),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
+  theme_minimal() +
+  labs(title = "Recidivism by prison offense",
+       x = "Prison Offense",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Prison Years
+
+People who are sentenced to fewer years in prison, specifically fewer than 2 years, are more likely to re-offend in 3 years than those who are given longer prison sentences. 
+
+This might be hard to push, but the high occurrence of people with repeated shorter sentences could suggest that those with lesser offences (assuming lesser offenses = shorter prison sentence) should not be sentenced at all. There could be an alternative intervention for these offenders to keep them out of the prison system for repeated short stints.
+
+```{r TestIVs_PrisonYears, fig.width=7, fig.height=4}
+recid_by_PrisonYrs <- ga_recid %>% 
+  group_by(prison_years, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+recid_by_PrisonYrs$prison_years <- 
+  factor(recid_by_PrisonYrs$prison_years,
+         levels = c("Less than 1 year", "1-2 years",
+                    "Greater than 2 to 3 years", "More than 3 years"))
+
+x_labs_PrisonYrs <- c("Less than 1 year", "1-2 years",
+                      "2-3 years", "More than 3 years")
+
+ggplot() +
+  geom_col(data = recid_by_PrisonYrs,
+           aes(x = prison_years, y = justice_inv_pop, fill = prison_years),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_x_discrete(labels = x_labs_PrisonYrs) +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
+  theme_minimal() +
+  labs(title = "Recidivism by prison years",
+       x = "Prison years",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Age at Release
+
+People who are younger at the time of their release are more likely to re-offend within three years. This suggests there needs to be more assistance to reintegrate younger people back into society after their prison release. Without proper social services and sustained behavioral intervention, younger people may be more inclined to fall back into previous behaviors.
+
+```{r TestIVs_ReleaseAge, fig.width=7, fig.height=4}
+recid_by_Age <- ga_recid %>% 
+  group_by(age_at_release, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+ggplot() +
+  geom_col(data = recid_by_Age,
+           aes(x = age_at_release, y = justice_inv_pop, fill = age_at_release),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char, scales = "free") +
+  theme_minimal() +
+  labs(title = "Recidivism by age at release",
+       x = "Age at Release",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Program Attendences
+
+The outlier is that many more people who do not attend any programs during their original sentence are more likely to re-offend in three years. This supports the efforts of prison programming to prevent future offenses. 
+
+Although.......Reoffenses in 3 years is technically higher in every single program attendence category, so I'm not sure how valid this assumption really is...
+
+```{r TestIVs_ProgramAttendance, fig.width=7, fig.height=4}
+recid_by_Program <- ga_recid %>% 
+  group_by(program_attendances, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+recid_by_Program$program_attendances <- 
+  factor(recid_by_Program$program_attendances,
+         levels = c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                    "10", "10 or more"))
+
+ggplot() +
+  geom_col(data = recid_by_Program,
+           aes(x = program_attendances, y = justice_inv_pop, fill = program_attendances),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char) +
+  theme_minimal() +
+  labs(title = "Recidivism by program attendances",
+       x = "Program attendances",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Crafting and assessing a model for recidivism
+
+## Describing the best-performing model
+
+```{r create_partition}
+ga_recid <- ga_recid %>% 
+  mutate(prison_years_over3 = case_when(
+           prison_years == "More than 3 years" ~ 1,
+           TRUE ~ 0),
+         programs_over10 = case_when(
+           program_attendances == "10 or more" ~ 1,
+           TRUE ~ 0),
+         programs_none = case_when(
+           program_attendances == "0" ~ 1,
+           TRUE ~ 0),
+         older_than37 = case_when(
+           age_at_release %in% c("38-42", "43-47", "48 or older") ~ 1,
+           age_at_release %in% c("18-22", "23-27", "23-27", 
+                                 "28-32", "33-37") ~ 0),
+         some_college = case_when(
+           education_level == "At least some college" ~ 1,
+           education_level %in% c("High School Diploma",
+                                  "Less than HS diploma") ~ 0),
+         high_supervision = case_when(
+           supervision_level_first == "High" ~ 1,
+           TRUE ~ 0),
+         offense_property = case_when(
+           prison_offense == "Property" ~ 1,
+           TRUE ~ 0),
+         offense_violent_sex = case_when(
+           prison_offense == "Violent/Sex" ~ 1,
+           TRUE ~ 0),
+         one_dependent = case_when(
+           dependents == "1" ~ 1,
+           TRUE ~ 0),
+    )
+
+set.seed(3456)
+
+train_index <- createDataPartition(ga_recid$recidivism_within_3years, p = .50,
+                                  list = FALSE,
+                                  times = 1)
+
+recid_train <- ga_recid[ train_index,]
+recid_test  <- ga_recid[-train_index,]
+
+unique(ga_recid$supervision_level_first)
+```
+
+- Creating dummy variables for categorical seem to help
+- Jobs per year, average days per drug test, violations fail to report, violations move without permission, made model worse
+- A no program attendance variable was not helpful
+
+```{r models}
+recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property +
+                       offense_violent_sex + percent_days_employed +
+                       prison_years_over3 + older_than37 + programs_over10 +
+                       high_supervision + one_dependent +
+                       prior_arrest_episodes_dv_charges + prior_revocations_parole +
+                       prior_revocations_probation,
+                     data = ga_recid,
+                     family="binomial" (link="logit")) 
+```
+
+
+```{r, results = "asis"}
+stargazer(recid_model_3, type = "html")
+```
+
+## Model diagnostics
+
+### Confusion Matrix
+
+```{r conf_matrix}
+recid_test <- recid_test %>% 
+  mutate(outcome = as.factor(recidivism_within_3years),
+         probs = predict(recid_model_3, recid_test, type= "response"),
+         pred_outcome = as.factor(case_when(probs >= 0.5 ~ 1,
+                                            probs < 0.5 ~ 0)))
+
+cm <- confusionMatrix(recid_test$pred_outcome, recid_test$outcome,
+                      positive = "1")
+
+cm_table <- cm$table
+cm_df <- as.data.frame(cm_table)
+
+rownames(cm_df) <- c("True Negative", "False Positive", 
+                     "False Negative", "True Positive")
+```
+
+The confusion matrix below highlights our model's relative sensitivity and specificity. It shows a True Positive value of 6,015, meaning 6,015 entries are correctly identified as positive. In this case, that means our model correctly predicts 6,015 people who experience recidivism within three years. The False Positive value is 2,869, meaning 2,869 people are incorrectly predicted to experience recidivism within three years. The False Negative value of 1,417 represents the number of people who will experience recidivism in the next three years that our model failed to predict. The True Negative value of 2,385 represents the number of people our model correctly predicted to stay out of the prison system within three years. 
+
+The sensitivity, or recall, of our model is 0.81, meaning it correctly identifies 81% of people who will experience recidivism within three years. The specificity of our model is 0.45, meaning the model correctly identifies 45% of people who will not reoffend in three years. It has an accuracy of 66%.
+
+```{r conf_matrix_as_tbl, results = "show"}
+gt(cm_df %>% 
+     rownames_to_column()) %>% 
+  fmt_number(columns = Freq, decimals = 0) %>% 
+  tab_header(title = md("**Confusion Matrix**")) %>%
+  opt_align_table_header(align = "left") %>%
+  cols_label(Freq = "Frequency")
+```
+
+### ROC curve
+
+```{r roc_curve}
+auc(recid_test$outcome, recid_test$probs)
+
+ggplot(recid_test, aes(d = as.numeric(outcome), m = probs)) +
+  geom_roc(n.cuts = 50, labels = FALSE, colour = "#1f78b4") +
+  style_roc(theme = theme_grey) +
+  geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
+  labs(title = "ROC Curve: Recidivism Model") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)))
+```
+
+```{r}
+palette2 <- c("#ff7f00","#1f78b4")
+
+ggplot(subset(recid_test, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
+  geom_density(alpha = .75,
+               color = NA) +
+  scale_fill_manual(name = "Outcome",
+                    labels = c("Did not reoffend (0)", "Reoffended (1)"),
+                    values = palette2) +
+  labs(x = "Recidivism", y = "Density of probabilities",
+       title = "Distribution of predicted probabilities by observed outcome") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        strip.text.x = element_text(size = 18))
+```
+
+### Prediction error and disparities by race & gender
+
+Analysis of the interactions between race and gender suggest that the model underpredicts for white men and women compared to Black men and women. The rate of false positives for Black men is 22.8% vs. 19.7% for white men. Similarly, the false positive rate for Black women is 33.3% vs. 28.8% for white women. Recidivism is overall are less accuratley predicted for women. 
+
+```{r pred_disparity}
+recid_test <- recid_test %>% 
+  mutate(cm = case_when((outcome == 1) & (pred_outcome == 1) ~ "True Positive",
+                        (outcome == 0) & (pred_outcome == 1) ~ "False Positive",
+                        (outcome == 0) & (pred_outcome == 0) ~ "True Negative",
+                        (outcome == 1) & (pred_outcome == 0) ~ "False Negative"),
+         gender = case_when(gender == "F" ~ "Women",
+                            gender == "M" ~ "Men"),
+         race = case_when(race == "BLACK" ~ "Black",
+                          race == "WHITE" ~ "White"))
+
+error_by_demographics <- recid_test %>% 
+  group_by(gender, race, cm) %>% 
+  tally() %>% 
+  mutate(pct_outcome = n / sum(n))
+```
+
+```{r pred_disparity_tbl, results = "show"}
+gt(error_by_demographics) %>% 
+  fmt_number(columns = n, decimals = 0) %>% 
+  fmt_percent(columns = pct_outcome, decimals = 1) %>% 
+  cols_label(cm = "Prediction Category",
+             n = "Count",
+             pct_outcome = "% Subgroup") %>% 
+  tab_header(title = md("**Prediction disparities by race & gender**")) %>%
+  opt_align_table_header(align = "left") %>% 
+  tab_style(location = cells_row_groups(),
+            style = cell_text(weight = "bold"))
+```
+
+# Estimating a "cost" of recidivism
+
+```{r cost_benefit}
+recid_test <- recid_test %>%
+  filter(!is.na(pred_outcome))
+
+cost_benefit_table <-
+   recid_test %>%
+      count(pred_outcome, outcome) %>%
+      summarize(True_Negative = sum(n[pred_outcome==0 & outcome==0]),
+                True_Positive = sum(n[pred_outcome==1 & outcome==1]),
+                False_Negative = sum(n[pred_outcome==0 & outcome==1]),
+                False_Positive = sum(n[pred_outcome==1 & outcome==0])) %>%
+       gather(Variable, Count) %>%
+       mutate(Revenue =
+               ifelse(Variable == "True_Negative", Count * 0,
+               ifelse(Variable == "True_Positive",((.35 - .1) * Count),
+               ifelse(Variable == "False_Negative", (-0.35) * Count,
+               ifelse(Variable == "False_Positive", (-0.1) * Count, 0))))) %>%
+    bind_cols(data.frame(Description = c(
+              "We correctly predicted no recidivism",
+              "We correctly predicted recidivism",
+              "We predicted no recidivism and person reoffended",
+              "We predicted recidivism and person did not reoffend")))
+
+
+```
+
+```{r cost_benefit_tbl, results = "show"}
+gt(cost_benefit_table) %>% 
+  fmt_number(columns = Count, decimals = 0) %>% 
+  fmt_currency(columns = Revenue, decimals = 0) %>% 
+  cols_label(Variable = "Outcome") %>% 
+  tab_header(title = md("**Cost-benefit analysis**")) %>% 
+  opt_align_table_header(align = "left")
+```
+
+# Conclusion
+
+# Appendix
+
+Residence changes does not really suggest housing instability is related to recidivism. Nor is gang affiliation (not listed below).
+
+```{r TestIVs_ResidenceChanges}
+recid_by_moving <- ga_recid %>% 
+  group_by(residence_changes, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+ggplot() +
+  geom_col(data = recid_by_moving,
+           aes(x = residence_changes, y = justice_inv_pop, fill = residence_changes),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char) +
+  theme_minimal() +
+  labs(title = "Recidivism by number of residence changes",
+       x = "Number of residence changes",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Episodes of prior gun charges doesn't predict recidivism in 3 years either.
+
+```{r TestIVs_PriorGunCharges}
+recid_by_PriorGun <- ga_recid %>% 
+  group_by(prior_arrest_episodes_gun_charges, recid_dv_char) %>% 
+  summarize(justice_inv_pop = n())
+
+ggplot() +
+  geom_col(data = recid_by_PriorGun,
+           aes(x = prior_arrest_episodes_gun_charges, y = justice_inv_pop, fill = prior_arrest_episodes_gun_charges),
+           position = "dodge",
+           show.legend = FALSE) +
+  scale_fill_brewer(type = "qual",
+                    palette = "Paired") +
+  scale_y_continuous(labels = scales::label_comma()) +
+  facet_wrap(~ recid_dv_char) +
+  theme_minimal() +
+  labs(title = "Recidivism by episodes of prior gun charges",
+       x = "Episodes of prior gun charges",
+       y = "Justice-involved pop.") +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
