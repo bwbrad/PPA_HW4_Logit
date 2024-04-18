@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, cache = TRUE, warning = FALS
 
 # Trade-offs between sensitivity and specificity
 
-Recidivism, or the tendency of a person previously convicted of a crime to reoffend, can be critical to understand in order to effectively target limited time and resources. Using a model to predict recidivism might help more fairly distribute resources to prevent justice-involved people from falling back into prison. Said model might just as easily be manipulated to tighten the disproportionate hold the parole and probation system has on certian communities.
+Recidivism, or the tendency of a person previously convicted of a crime to reoffend, can be critical to understand in order to effectively target limited time and resources. Using a model to predict recidivism might help more fairly distribute resources to prevent justice-involved people from falling back into prison. Said model might just as easily be manipulated to tighten the disproportionate hold the parole and probation system has on certain communities.
 
 This duality is highlighted by the decisions that go into a logistic regression, or logit, model which uses potential predictors to come up with a binary (yes/no) outcome. One of the most important considerations in building a logit model are the the tradeoffs between sensitivity and specificity:
 
@@ -26,7 +26,6 @@ This duality is highlighted by the decisions that go into a logistic regression,
 ```{r load_packages, warning = FALSE}
 options(scipen=10000000)
 
-####### CHECK if we need all of the below
 
 library(tidyverse)
 library(kableExtra)
@@ -64,7 +63,7 @@ recid_sum <- ga_recid %>%
 
 # Choosing Variables
 
-This model is built using data from Georgia's Office of Justice Programs on a subset of the state's justice-involved population up through 2021. From a high level, 17% more people reoffend within 3 years. A greater share of reoffenses from the start means that whatever model we build will do a better job predicting those who do reoffend opposed to those who do not.
+This model is built using data from Georgia's Office of Justice Programs on a subset of the state's justice-involved population up through 2021. From a high level, 58% of people reoffend within 3 years. A greater share of reoffenses from the start means that whatever model we build will do a better job predicting those who do reoffend opposed to those who do not.
 
 ```{r, results = "show"}
 gt(recid_sum) %>% 
@@ -73,7 +72,9 @@ gt(recid_sum) %>%
   cols_label(recid_dv_char = "Outcome",
              people = "Number",
              pct_people = "Percent") %>% 
-  tab_header(title = md("**Overview of justice-involved population**"))
+  tab_header(title = md("**Overview of justice-involved population**")) %>% 
+  gt_theme_nytimes() %>%  
+  opt_row_striping()
 ```
 
 Below is a discussion on a variety of variables included in the Georgia dataset and their relationship to recidisim:
@@ -370,12 +371,15 @@ gt(cm_df %>%
   fmt_number(columns = Freq, decimals = 0) %>% 
   tab_header(title = md("**Confusion Matrix**")) %>%
   opt_align_table_header(align = "left") %>%
-  cols_label(Freq = "Frequency")
+  cols_label(Freq = "Frequency") %>% 
+  gt_theme_nytimes() %>% 
+  opt_row_striping()
 ```
 
 ### ROC curve
 
 ```{r roc_curve}
+
 auc(recid_test$outcome, recid_test$probs)
 
 ggplot(recid_test, aes(d = as.numeric(outcome), m = probs)) +
@@ -435,7 +439,9 @@ gt(error_by_demographics) %>%
   tab_header(title = md("**Prediction disparities by race & gender**")) %>%
   opt_align_table_header(align = "left") %>% 
   tab_style(location = cells_row_groups(),
-            style = cell_text(weight = "bold"))
+            style = cell_text(weight = "bold")) %>% 
+  gt_theme_nytimes() %>% 
+  opt_row_striping()
 ```
 
 # Estimating a "cost" of recidivism
@@ -451,7 +457,7 @@ cost_benefit_table <-
                 True_Positive = sum(n[pred_outcome==1 & outcome==1]),
                 False_Negative = sum(n[pred_outcome==0 & outcome==1]),
                 False_Positive = sum(n[pred_outcome==1 & outcome==0])) %>%
-       gather(Variable, Count) %>%
+       gather(Variable, Count) %>% 
        mutate(Revenue =
                ifelse(Variable == "True_Negative", Count * 0,
                ifelse(Variable == "True_Positive",((.35 - .1) * Count),
@@ -464,16 +470,84 @@ cost_benefit_table <-
               "We predicted recidivism and person did not reoffend")))
 
 
+
 ```
 
 ```{r cost_benefit_tbl, results = "show"}
+
+cost_benefit_table <- cost_benefit_table %>% 
+  mutate(Variable = recode(Variable, 
+                           "True_Negative" = "True Negative", 
+                           "True_Positive" = "True Positive", 
+                           "False_Negative" = "False Negative", 
+                           "False_Positive" = "False Positive"))
+
 gt(cost_benefit_table) %>% 
   fmt_number(columns = Count, decimals = 0) %>% 
   fmt_currency(columns = Revenue, decimals = 0) %>% 
   cols_label(Variable = "Outcome") %>% 
   tab_header(title = md("**Cost-benefit analysis**")) %>% 
-  opt_align_table_header(align = "left")
+  opt_align_table_header(align = "left") %>% 
+  gt_theme_nytimes() %>% 
+  opt_row_striping()
 ```
+
+```{r alternative costs}
+
+#True negative
+#Person reintegrated into society, 50k  /year 
+
+
+#True positive 
+#Cost of imprisonment per year in PA is $50,000
+#https://www.vera.org/publications/what-jails-cost-cities/philadelphia-pa
+
+#False Negative
+#Estimated cost of a criminal trial at $15,000 + average of another 1.5 years in jail, $75,000
+#Cost of person committing crime $50,000
+
+#False Positive 
+#Cost of imprisonment pluse 50k / year opporunity cost of person not being in society
+
+
+alt_cost_benefit_table <-
+   recid_test %>%
+      count(pred_outcome, outcome) %>%
+      summarize(True_Negative = sum(n[pred_outcome==0 & outcome==0]),
+                True_Positive = sum(n[pred_outcome==1 & outcome==1]),
+                False_Negative = sum(n[pred_outcome==0 & outcome==1]),
+                False_Positive = sum(n[pred_outcome==1 & outcome==0])) %>%
+       gather(Variable, Count) %>% 
+       mutate(Cost =
+               ifelse(Variable == "True_Negative", Count * 150000,
+               ifelse(Variable == "True_Positive",((-150000) * Count),
+               ifelse(Variable == "False_Negative", (-90000) * Count,
+               ifelse(Variable == "False_Positive", (-300000) * Count, 0))))) %>%
+    bind_cols(data.frame(Description = c(
+              "We correctly predicted no recidivism",
+              "We correctly predicted recidivism",
+              "We predicted no recidivism and person reoffended",
+              "We predicted recidivism and person did not reoffend")))
+
+
+alt_cost_benefit_table <- alt_cost_benefit_table %>% 
+  mutate(Variable = recode(Variable, 
+                           "True_Negative" = "True Negative", 
+                           "True_Positive" = "True Positive", 
+                           "False_Negative" = "False Negative", 
+                           "False_Positive" = "False Positive"))
+
+gt(alt_cost_benefit_table) %>% 
+  fmt_number(columns = Count, decimals = 0) %>% 
+  fmt_currency(columns = Cost, decimals = 0) %>% 
+  cols_label(Variable = "Outcome") %>% 
+  tab_header(title = md("**Cost-benefit analysis**")) %>% 
+  opt_align_table_header(align = "left") %>% 
+  gt_theme_nytimes() %>% 
+  opt_row_striping()
+
+```
+
 
 # Conclusion
 
