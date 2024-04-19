@@ -105,6 +105,7 @@ ggplot() +
         legend.position = "bottom",
         axis.text.x = element_text(angle = 45, hjust = 1))
 ```
+
 ### Days Worked
 
 The median percent of days employed is much higher for those who did not reoffend. What jumps out particularly is the substantially greater number of reoffenses for people who were employed zero days. This suggests that stability of income and employment may be critical in keeping formerly convicted people out of the justice system.
@@ -239,9 +240,7 @@ ggplot() +
 
 ## Program Attendences
 
-The outlier is that many more people who do not attend any programs during their original sentence are more likely to re-offend in three years. This supports the efforts of prison programming to prevent future offenses. 
-
-Although.......Reoffenses in 3 years is technically higher in every single program attendence category, so I'm not sure how valid this assumption really is...
+Unfortunately, most prisoners do not participate in programming, so it is difficult to determine the effect program attendance has on recidivism. There is some evidence that people who do not attend any programs during their original sentence are more likely to re-offend in three years. This may support the efforts of prison programming to prevent future offenses. Nevertheless, since the metric is statistically significantly associated with -.2 log odds for each program attended, we included it in our report. 
 
 ```{r TestIVs_ProgramAttendance, fig.width=7, fig.height=4}
 recid_by_Program <- ga_recid %>% 
@@ -319,10 +318,18 @@ recid_test  <- ga_recid[-train_index,]
 
 unique(ga_recid$supervision_level_first)
 ```
+We made three different models, and settled on one with 12 different predictors of recidivism related to individual characteristics (education level, number of dependents), and criminal history (type of offense, number of years in prison). We found that our model predicted more effectively when we: 
 
-- Creating dummy variables for categorical seem to help
-- Jobs per year, average days per drug test, violations fail to report, violations move without permission, made model worse
-- A no program attendance variable was not helpful
+* Created dummy variables to simplify categorical predictors
+* Removed measures for drug testing, failure to report violations, violations for movement without permission, and low program attendance.
+
+Every predictor in our final model is significant at a 95% confidence interval. Our model also has an 8.4% decrease between estimates of null deviance and residual deviance, indicating that our variables increase the model's effectiveness over the intercept alone.
+
+See a table of our model's predictions below. Our model includes values that both increase and decrease the log odds of recidivism, including percent of days employed (1.164 decrease in log odds of recidivism per percent) and dummy variable for property offense (.317 increase in log odds of recidivism for those who committed property offenses).
+
+Among those most at risk of recidivism include those who have only been in prison a short time, those who committed property offenses, and those who had prior parole violations.
+
+
 
 ```{r models}
 recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property +
@@ -333,6 +340,7 @@ recid_model_3 <- glm(recidivism_within_3years ~ some_college + offense_property 
                        prior_revocations_probation,
                      data = ga_recid,
                      family="binomial" (link="logit")) 
+
 ```
 
 
@@ -341,6 +349,23 @@ stargazer(recid_model_3, type = "html")
 ```
 
 ## Model diagnostics
+
+### ROC curve
+
+Our ROC curve shows that, while our model is not ideal, it still predicts better than a random prediction. It has an area under the curve of .7, which indicates that is a fair, but not good predictor of recidivism. One problem with the curve is that it is a gentle arc, with no clear change in slope that would help us know where to change our predictions for recidivism. 
+
+```{r roc_curve}
+
+auc(recid_test$outcome, recid_test$probs)
+
+ggplot(recid_test, aes(d = as.numeric(outcome), m = probs)) +
+  geom_roc(n.cuts = 50, labels = FALSE, colour = "#1f78b4") +
+  style_roc(theme = theme_grey) +
+  geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
+  labs(title = "ROC Curve: Recidivism Model") +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)))
+```
 
 ### Confusion Matrix
 
@@ -363,7 +388,7 @@ rownames(cm_df) <- c("True Negative", "False Positive",
 
 The confusion matrix below highlights our model's relative sensitivity and specificity. It shows a True Positive value of 6,015, meaning 6,015 entries are correctly identified as positive. In this case, that means our model correctly predicts 6,015 people who experience recidivism within three years. The False Positive value is 2,869, meaning 2,869 people are incorrectly predicted to experience recidivism within three years. The False Negative value of 1,417 represents the number of people who will experience recidivism in the next three years that our model failed to predict. The True Negative value of 2,385 represents the number of people our model correctly predicted to stay out of the prison system within three years. 
 
-The sensitivity, or recall, of our model is 0.81, meaning it correctly identifies 81% of people who will experience recidivism within three years. The specificity of our model is 0.45, meaning the model correctly identifies 45% of people who will not reoffend in three years. It has an accuracy of 66%.
+Our model has an accuracy of just 66%, however the sensitivity, or recall, of our model is 0.81, meaning it correctly identifies 81% of people who will experience recidivism within three years. The specificity of our model is 0.45, meaning the model correctly identifies 45% of people who will not reoffend in three years. 
 
 ```{r conf_matrix_as_tbl, results = "show"}
 gt(cm_df %>% 
@@ -376,41 +401,12 @@ gt(cm_df %>%
   opt_row_striping()
 ```
 
-### ROC curve
 
-```{r roc_curve}
 
-auc(recid_test$outcome, recid_test$probs)
-
-ggplot(recid_test, aes(d = as.numeric(outcome), m = probs)) +
-  geom_roc(n.cuts = 50, labels = FALSE, colour = "#1f78b4") +
-  style_roc(theme = theme_grey) +
-  geom_abline(slope = 1, intercept = 0, size = 1.5, color = 'grey') +
-  labs(title = "ROC Curve: Recidivism Model") +
-  theme_minimal() +
-  theme(plot.title = element_text(face = "bold", margin = margin(b = 6)))
-```
-
-```{r}
-palette2 <- c("#ff7f00","#1f78b4")
-
-ggplot(subset(recid_test, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
-  geom_density(alpha = .75,
-               color = NA) +
-  scale_fill_manual(name = "Outcome",
-                    labels = c("Did not reoffend (0)", "Reoffended (1)"),
-                    values = palette2) +
-  labs(x = "Recidivism", y = "Density of probabilities",
-       title = "Distribution of predicted probabilities by observed outcome") +
-  theme_minimal() +
-  theme(legend.position = "bottom",
-        plot.title = element_text(face = "bold", margin = margin(b = 6)),
-        strip.text.x = element_text(size = 18))
-```
 
 ### Prediction error and disparities by race & gender
 
-Analysis of the interactions between race and gender suggest that the model underpredicts for white men and women compared to Black men and women. The rate of false positives for Black men is 22.8% vs. 19.7% for white men. Similarly, the false positive rate for Black women is 33.3% vs. 28.8% for white women. Recidivism is overall are less accuratley predicted for women. 
+Analysis of the interactions between race and gender suggest that the model underpredicts for white men and women compared to Black men and women. The rate of false positives for Black men is 22.8% vs. 19.7% for white men. Similarly, the false positive rate for Black women is 33.3% vs. 28.8% for white women. Recidivism is overall are less accurately predicted for women. 
 
 ```{r pred_disparity}
 recid_test <- recid_test %>% 
@@ -446,6 +442,22 @@ gt(error_by_demographics) %>%
 
 # Estimating a "cost" of recidivism
 
+It is difficult to evaluate the economic impacts of recidivism, as the negative inverse of recidivism (keeping someone in prison), is also a very costly enterprise. 
+
+To attempt to estimate the financial implication of our model, we utilize the following assumptions: 
+
+* The cost of imprisonment in Pennsylvania costs an average of $150,000 for three years
+* The value of a person living and working outside of prison is $150,000 for three years. This can be a positive value for someone justly released from prison or a negative value for someone unjustly kept in prison. 
+* The cost of a criminal trial due to recidivism is $15,000
+* Recidivism occurs at an average of 1.5 years after release.
+
+Together, these assumptions led us to the following cost estimates:
+
+* True Negative (no recidivism, no prison): **+$300,000** 
+* True Positive (recidivism, three years of prison): **-$100,000**
+* False Negative (recidivism, 1.5 years of jail): **-$90,000**
+* False Positive (no recidivism, 1.5 years of jail) **-$300,000**
+
 ```{r cost_benefit}
 recid_test <- recid_test %>%
   filter(!is.na(pred_outcome))
@@ -473,41 +485,22 @@ cost_benefit_table <-
 
 ```
 
-```{r cost_benefit_tbl, results = "show"}
+```{r alternative costs, results='markup'}
 
-cost_benefit_table <- cost_benefit_table %>% 
-  mutate(Variable = recode(Variable, 
-                           "True_Negative" = "True Negative", 
-                           "True_Positive" = "True Positive", 
-                           "False_Negative" = "False Negative", 
-                           "False_Positive" = "False Positive"))
-
-gt(cost_benefit_table) %>% 
-  fmt_number(columns = Count, decimals = 0) %>% 
-  fmt_currency(columns = Revenue, decimals = 0) %>% 
-  cols_label(Variable = "Outcome") %>% 
-  tab_header(title = md("**Cost-benefit analysis**")) %>% 
-  opt_align_table_header(align = "left") %>% 
-  gt_theme_nytimes() %>% 
-  opt_row_striping()
-```
-
-```{r alternative costs}
-
-#True negative
-#Person reintegrated into society, 50k  /year 
+#True negative (+$300,000)
+#Person reintegrated into society, 50k  /year on saved prison costs + 50k/year on benefit to society
 
 
-#True positive 
-#Cost of imprisonment per year in PA is $50,000
+#True positive (-$100,000)
+#Cost of imprisonment per year in PA is $50,000/yr, saved cost of committed crime is $50k
 #https://www.vera.org/publications/what-jails-cost-cities/philadelphia-pa
 
-#False Negative
+#False Negative(-$90,000)
 #Estimated cost of a criminal trial at $15,000 + average of another 1.5 years in jail, $75,000
 #Cost of person committing crime $50,000
 
-#False Positive 
-#Cost of imprisonment pluse 50k / year opporunity cost of person not being in society
+#False Positive (-$300,000)
+#Cost of imprisonment plus 50k / year opportunity cost of person not being in society
 
 
 alt_cost_benefit_table <-
@@ -519,15 +512,16 @@ alt_cost_benefit_table <-
                 False_Positive = sum(n[pred_outcome==1 & outcome==0])) %>%
        gather(Variable, Count) %>% 
        mutate(Cost =
-               ifelse(Variable == "True_Negative", Count * 150000,
-               ifelse(Variable == "True_Positive",((-150000) * Count),
+               ifelse(Variable == "True_Negative", Count * 300000,
+               ifelse(Variable == "True_Positive",((-100000) * Count),
                ifelse(Variable == "False_Negative", (-90000) * Count,
                ifelse(Variable == "False_Positive", (-300000) * Count, 0))))) %>%
     bind_cols(data.frame(Description = c(
               "We correctly predicted no recidivism",
               "We correctly predicted recidivism",
               "We predicted no recidivism and person reoffended",
-              "We predicted recidivism and person did not reoffend")))
+              "We predicted recidivism and person did not reoffend"))) %>% 
+  mutate(Cost = Cost/1000000)
 
 
 alt_cost_benefit_table <- alt_cost_benefit_table %>% 
@@ -543,19 +537,38 @@ gt(alt_cost_benefit_table) %>%
   cols_label(Variable = "Outcome") %>% 
   tab_header(title = md("**Cost-benefit analysis**")) %>% 
   opt_align_table_header(align = "left") %>% 
+  cols_label(Cost = "Cost ($Million)") %>% 
   gt_theme_nytimes() %>% 
   opt_row_striping()
 
 ```
-
+In total, our model shows the government losing $875 million dollars a year. While our model may save as much as $716 million dollars for releasing prisoners early, the real lesson from this exercise is that prison is extremely expensive, and should be avoided whenever possible. However, as rates of recidivism show, prison itself is not a deterrent of further time in prison. Punishment for criminal activity needs to include non-carceral rehabilitation that will save the government money in the long run. 
 
 # Conclusion
 
+Overall, we determine that social determinants of criminality, including level of education, employment, and race have a significant impact on individuals' likelihood of recidivism. At the same time, though our model can help the government release prisoners early who have low likelihoods of recidivism, it does nothing to resolve the overarching problem of high recidivism rates. 
+
+For further research, we recommend pairing the underlying social and economic causes of the factors that most reliably predict recidivism with appropriate ameliorative programming. These could include: 
+
+* Where "some college" reduces recidivism, **increase access to higher education**
+* Where "percent of days employed" decreases recidivism, **improve professional opportunities after release**
+* Where property offenses increase recidivism, **offer post-incarceration services targeted at those who committed property offenses**
+
+While prison may be an important tool for managing public safety, the best economic and social tools for improving outcomes in the criminal justice system are keeping people out of prison in the first place, and helping them stay out when they're released. 
+
+### Use of our model
+
+While it is important to help people stay out of prison, our model can still be useful in and of itself. Especially given the low accuracy of our model, it should be used as a tool for matching prisoners with support services, rather than as a decider of whether or not someone should be released or kept in prison. For example, if a prisoner has a high log-likelihood of recidivism, instead of keeping them in prison, our model could identify them as a target for specific support services once released.The model can also be refined with future observations of trends in recidivism, with those added support systems.  
+
 # Appendix
+
+See graphics below that were not included in our final modeling, but offer extra evidence of the interaction between personal characteristics and recidivism. We also include the distribution of our model's predictions, based on actual results to show the difficulty of predicting at the margins. 
+
+### Number of residence changes
 
 Residence changes does not really suggest housing instability is related to recidivism. Nor is gang affiliation (not listed below).
 
-```{r TestIVs_ResidenceChanges}
+```{r TestIVs_ResidenceChanges, fig.width=7, fig.height=4}
 recid_by_moving <- ga_recid %>% 
   group_by(residence_changes, recid_dv_char) %>% 
   summarize(justice_inv_pop = n())
@@ -578,9 +591,11 @@ ggplot() +
         axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
+### Prior gun charges
+
 Episodes of prior gun charges doesn't predict recidivism in 3 years either.
 
-```{r TestIVs_PriorGunCharges}
+```{r TestIVs_PriorGunCharges, fig.width=7, fig.height=4}
 recid_by_PriorGun <- ga_recid %>% 
   group_by(prior_arrest_episodes_gun_charges, recid_dv_char) %>% 
   summarize(justice_inv_pop = n())
@@ -601,4 +616,24 @@ ggplot() +
   theme(plot.title = element_text(face = "bold", margin = margin(b = 6)),
         legend.position = "bottom",
         axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+### Distribution of predictions
+
+```{r predictions, fig.width=7, fig.height=4}
+palette2 <- c("#ff7f00","#1f78b4")
+
+ggplot(subset(recid_test, pred_outcome != "NA"), aes(x = probs, fill = as.factor(outcome))) + 
+  geom_density(alpha = .75,
+               color = NA) +
+  scale_fill_manual(name = "Outcome",
+                    labels = c("Did not reoffend (0)", "Reoffended (1)"),
+                    values = palette2) +
+  labs(x = "Recidivism", y = "Density of probabilities",
+       title = "Distribution of predicted probabilities by observed outcome") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(face = "bold", margin = margin(b = 6)),
+        strip.text.x = element_text(size = 18))
 ```
